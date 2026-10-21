@@ -1,0 +1,7 @@
+{
+  "name": "desktop-context",
+  "title": "Context Usage",
+  "description": "The agy CLI's /context report as a live side panel: exact token usage by category, checkpoints and files in context. Zero tokens per refresh.",
+  "version": "1.0.0",
+  "logo": "assets/logo.svg"
+}

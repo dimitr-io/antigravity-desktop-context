@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Context Usage</title>
+<script src="/preload.js"></script>
+<style>
+  :root {
+    --c-system: #9aa0a6;
+    --c-user: #a8c7fa;
+    --c-agent: #4c8df6;
+    --c-tool: #f9ab00;
+    --c-custom: #c58af9;
+    --c-sysmsg: #f28b82;
+    --fg: var(--foreground, #e3e3e3);
+    --dim: var(--muted-foreground, #9aa0a6);
+    --line: var(--border, rgba(127, 127, 127, .25));
+    --empty: color-mix(in srgb, var(--dim) 28%, transparent);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    color: var(--fg);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* thin overlay-style scrollbar instead of the platform default */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-button { display: none; }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--dim) 30%, transparent);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--dim) 55%, transparent); }
+
+  /* preload.js zeroes the body's padding, so the page padding lives here */
+  main { padding: 12px 14px 18px; }
+  .dim { color: var(--dim); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* header */
+  .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .model { font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
+  .live { width: 6px; height: 6px; border-radius: 50%; background: var(--empty); flex: none; }
+  .live.on { background: #81c995; }
+  .usage { margin: 2px 0 12px; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+  .usage .big { font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
+  .usage .of { color: var(--dim); }
+  .usage .pct { margin-left: auto; font-size: 13px; font-weight: 600; }
+  button {
+    font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap;
+    background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px;
+  }
+  button:hover { color: var(--fg); border-color: var(--dim); }
+
+  /* grid: each dot is 1% of the context window */
+  .grid { display: grid; grid-template-columns: repeat(20, 1fr); gap: 4px; max-width: 320px; margin-bottom: 4px; }
+  .dot { aspect-ratio: 1; border-radius: 50%; background: var(--empty); }
+  .legend { font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+
+  /* sections */
+  section { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 10px; }
+  h2 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 0 0 6px; display: flex; justify-content: space-between; }
+  h2 .hint { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .note { font-size: 12px; color: var(--dim); margin: -2px 0 8px; }
+  .group + .group { margin-top: 8px; }
+  .row { display: grid; grid-template-columns: 10px 1fr auto 42px; align-items: center; gap: 8px; padding: 2.5px 0; }
+  .row .tok { text-align: right; }
+  .row .p { text-align: right; color: var(--dim); font-size: 12px; }
+  .mark { width: 8px; height: 8px; border-radius: 50%; }
+  .mark.sq { border-radius: 2px; }
+  .mark.free { background: transparent; border: 1.5px solid var(--empty); }
+
+  .files li { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 3px 0; }
+  .files .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .files .dir { display: block; font-size: 11.5px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  .files .tok { color: var(--dim); font-size: 12px; align-self: start; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  .ck-main { display: flex; justify-content: space-between; gap: 8px; }
+  .badge { font-size: 11px; color: #81c995; border: 1px solid color-mix(in srgb, #81c995 40%, transparent); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
+
+  .empty { margin: 48px 8px; text-align: center; color: var(--dim); }
+  footer { margin-top: 16px; font-size: 11px; color: var(--dim); display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<main id="main"><p class="empty">Loading…</p></main>
+
+<script>
+(() => {
+  const POLL_MS = 3000;
+  const SEGMENT_COLORS = ['var(--c-system)', 'var(--c-user)', 'var(--c-agent)', 'var(--c-tool)', 'var(--c-custom)'];
+  const CONVERSATION = { user: 'var(--c-user)', agent: 'var(--c-agent)', tool: 'var(--c-tool)', system_messages: 'var(--c-sysmsg)' };
+  const SYSTEM = new Set(['system_prompt', 'system_tools', 'system_overhead']);
+  const params = new URLSearchParams(location.search);
+  const conversationId = (window.sidecar && window.sidecar.conversationId) || params.get('conversationId') || '';
+  const doFetch = (window.sidecar && window.sidecar.fetch) || fetch;
+  const main = document.getElementById('main');
+  let workspace = '';
+  let report = null;
+  let lastJson = '';
+
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  function fmtTok(n) {
+    if (n >= 1e6) { const v = n / 1e6; return Number.isInteger(v) ? `${v}M` : `${v.toFixed(1)}M`; }
+    if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+    return String(n);
+  }
+
+  // The CLI's cell allocation: at least one cell per non-empty segment, scaled down on overflow.
+  function gridCells(segments, limit, total) {
+    let counts = segments.map((t) => (!t || !limit ? 0 : Math.max(1, Math.floor(t / limit * total))));
+    const used = counts.reduce((a, b) => a + b, 0);
+    if (used > total) counts = counts.map((c) => Math.floor(c * total / used));
+    return [...counts, total - counts.reduce((a, b) => a + b, 0)];
+  }
+
+  function grid(r) {
+    const counts = gridCells(r.grid_segments, r.limit_tokens, 100);
+    let dots = '';
+    counts.forEach((n, i) => {
+      dots += (i === 5 ? '<span class="dot"></span>' : `<span class="dot" style="background:${SEGMENT_COLORS[i]}"></span>`).repeat(n);
+    });
+    return `<div class="grid" title="Each dot is 1% of the context window">${dots}</div>`;
+  }
+
+  function categoryRow(c, limit) {
+    const color = CONVERSATION[c.key] || (SYSTEM.has(c.key) ? 'var(--c-system)' : 'var(--c-custom)');
+    const shape = CONVERSATION[c.key] ? '' : ' sq';
+    return `<div class="row"><span class="mark${shape}" style="background:${color}"></span><span>${esc(c.name)}</span>`
+      + `<span class="tok num">${fmtTok(c.tokens)}</span><span class="p num">${c.pct.toFixed(1)}%</span></div>`;
+  }
+
+  function categories(r) {
+    const conv = r.categories.filter((c) => CONVERSATION[c.key]);
+    const rest = r.categories.filter((c) => !CONVERSATION[c.key]);
+    const limit = r.limit_tokens;
+    const freePct = limit ? (r.free_tokens / limit * 100).toFixed(1) : '0.0';
+    const free = `<div class="row"><span class="mark free"></span><span class="dim">Free space</span>`
+      + `<span class="tok num">${fmtTok(r.free_tokens)}</span><span class="p num">${freePct}%</span></div>`;
+    const note = r.heading === 'Token usage by category' ? '' : `<p class="note">${esc(r.heading)}</p>`;
+    const buffer = r.checkpoint_buffer
+      ? `<p class="note">Checkpoint buffer: ${fmtTok(r.checkpoint_buffer)} tokens (not counted in usage)</p>` : '';
+    return `<section><h2>Token usage</h2>${note}
+      <div class="group">${conv.map((c) => categoryRow(c, limit)).join('')}</div>
+      ${rest.length ? `<div class="group">${rest.map((c) => categoryRow(c, limit)).join('')}</div>` : ''}
+      <div class="group">${free}</div>${buffer}</section>`;
+  }
+
+  function checkpoints(r) {
+    const ck = r.checkpoint_view;
+    if (!ck) return '';
+    const older = ck.historical ? `<div class="dim" style="font-size:12px">${ck.historical} older checkpoint(s) summarized, not in context</div>` : '';
+    return `<section><h2>Checkpoints <span class="hint">${ck.count} · /rewind</span></h2>
+      <div class="ck-main"><span>Checkpoint ${ck.active_number}: ${esc(ck.active_text)}</span><span class="badge">in context</span></div>${older}</section>`;
+  }
+
+  function splitPath(path) {
+    const trimmed = path.replace(/\/$/, '');
+    const i = trimmed.lastIndexOf('/');
+    const name = trimmed.slice(i + 1) + (path.endsWith('/') ? '/' : '');
+    let dir = i > 0 ? trimmed.slice(0, i) : '';
+    if (conversationId) dir = dir.replace(new RegExp(`^.*/brain/${conversationId}`), 'conversation folder');
+    return { name, dir };
+  }
+
+  function files(title, hint, items) {
+    if (!items || !items.length) return '';
+    const rows = items.map((f) => {
+      const { name, dir } = splitPath(f.path);
+      return `<li title="${esc(f.path)}"><span class="name">${esc(name)}<span class="dir">‎${esc(dir)}</span></span>`
+        + `<span class="tok num">${f.tokens > 0 ? fmtTok(f.tokens) : ''}</span></li>`;
+    }).join('');
+    return `<section><h2>${title} <span class="hint">${hint}</span></h2><ul class="files">${rows}</ul></section>`;
+  }
+
+  function render(r) {
+    const limit = r.limit_tokens;
+    main.innerHTML = `
+      <div class="top">
+        <div class="model"><span class="live on" title="Live"></span>${esc(r.model)}</div>
+        <button id="copy" title="Copy the report as the CLI prints it">Copy as text</button>
+      </div>
+      <div class="usage">
+        <span class="big num">${fmtTok(r.used_tokens)}</span>
+        <span class="of">/ ${limit ? fmtTok(limit) : 'Unknown'} tokens</span>
+        ${limit ? `<span class="pct num">${r.used_pct.toFixed(1)}%</span>` : ''}
+      </div>
+      ${grid(r)}
+      ${categories(r)}
+      ${checkpoints(r)}
+      ${files('Knowledge files', '/rules', r.knowledge_files)}
+      ${files('Artifact files', '/artifact', r.artifact_files)}
+      ${files('Skill files', '/skill', r.skill_files)}
+      ${files('System files', 'auto-loaded', r.system_files)}
+      <footer><span>Related: /artifact · /skill · /rewind</span><span>Updated ${esc(new Date(r.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</span></footer>`;
+    document.getElementById('copy').addEventListener('click', copy);
+  }
+
+  function showMessage(text) {
+    report = null;
+    lastJson = '';
+    main.innerHTML = `<p class="empty">${esc(text)}</p>`;
+  }
+
+  async function copy(event) {
+    if (!report) return;
+    try {
+      await navigator.clipboard.writeText(report.text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = report.text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    const btn = event.currentTarget;
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = 'Copy as text'; }, 1500);
+  }
+
+  async function refresh() {
+    if (document.hidden) return;
+    try {
+      const qs = new URLSearchParams({ conversationId, workspace });
+      const res = await doFetch(`/api/report?${qs}`);
+      const data = await res.json();
+      if (data.error === 'no-conversation') return showMessage('Open a conversation to see its context usage.');
+      if (data.error === 'no-database') return showMessage('This conversation has no saved data yet. Send a message first.');
+      if (data.error) return showMessage(`Couldn't read this conversation: ${data.message || data.error}`);
+      const json = JSON.stringify(data);
+      if (json === lastJson) return;
+      lastJson = json;
+      report = data;
+      render(data);
+    } catch {
+      const dot = document.querySelector('.live');
+      if (dot) dot.classList.remove('on');
+    }
+  }
+
+  document.addEventListener('visibilitychange', refresh);
+
+  async function start() {
+    if (window.sidecar && window.sidecar.getWorkspaceUris) {
+      const uris = await window.sidecar.getWorkspaceUris();
+      workspace = uris[0] || '';
+      window.sidecar.onWorkspaceChange((next) => {
+        if ((next[0] || '') !== workspace) { workspace = next[0] || ''; lastJson = ''; refresh(); }
+      });
+    }
+    refresh();
+    setInterval(refresh, POLL_MS);
+  }
+  start();
+})();
+</script>
+</body>
+</html>
