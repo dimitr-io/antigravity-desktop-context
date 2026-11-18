@@ -374,6 +374,97 @@ def detect_system_files(home: str, workspace: str | None, app_dir: str) -> list[
     return [(p, 0) for p in found]
 
 
+def _ts(msg: Msg | None) -> float:
+    if msg is None:
+        return 0.0
+    sec = msg.int(1)
+    return sec + msg.int(2) / 1e9 if sec > 0 else 0.0
+
+
+def collect_telemetry(steps: list[Step]) -> dict | None:
+    """Prompt-cache hit rates and output generation throughput across model turns."""
+    turns = 0
+    total_in = 0
+    total_cache_read = 0
+    last_cache: dict | None = None
+
+    stream_tok_sum = 0
+    stream_sec_sum = 0.0
+    e2e_tok_sum = 0
+    e2e_sec_sum = 0.0
+    last_speed: dict | None = None
+
+    for step in steps:
+        if step.type != 15:  # PLANNER_RESPONSE
+            continue
+        usage = step.md.msg(9)
+        if usage is None:
+            continue
+
+        fresh_in = usage.int(2) + usage.int(4)  # uncached input + cache creation
+        cache_read = usage.int(5)
+        turn_in = fresh_in + cache_read
+        if turn_in > 0:
+            turns += 1
+            total_in += turn_in
+            total_cache_read += cache_read
+            last_cache = {
+                "hit_pct": round(cache_read / turn_in * 100.0, 1),
+                "cache_read_tokens": cache_read,
+                "fresh_input_tokens": fresh_in,
+                "input_tokens": turn_in,
+            }
+
+        out_tok = usage.int(3)
+        if step.status == STATUS_DONE and out_tok > 0:
+            t_create = _ts(step.md.msg(1))
+            t_stream = _ts(step.md.msg(6))
+            t_done = _ts(step.md.msg(7))
+            e2e_sec = t_done - t_create if t_create > 0 and t_done > t_create else 0.0
+            stream_sec = t_done - t_stream if t_stream > 0 and t_done > t_stream else 0.0
+            ttft_sec = t_stream - t_create if t_create > 0 and t_stream >= t_create else None
+
+            decode_tps = round(out_tok / stream_sec, 1) if stream_sec >= 0.1 else None
+            e2e_tps = round(out_tok / e2e_sec, 1) if e2e_sec >= 0.1 else None
+
+            if stream_sec >= 0.1:
+                stream_tok_sum += out_tok
+                stream_sec_sum += stream_sec
+            if e2e_sec >= 0.1:
+                e2e_tok_sum += out_tok
+                e2e_sec_sum += e2e_sec
+
+            if decode_tps is not None or e2e_tps is not None:
+                last_speed = {
+                    "output_tokens": out_tok,
+                    "thinking_tokens": usage.int(9),
+                    "response_tokens": usage.int(10),
+                    "decode_tok_per_s": decode_tps,
+                    "e2e_tok_per_s": e2e_tps,
+                    "ttft_s": round(ttft_sec, 2) if ttft_sec is not None else None,
+                    "stream_s": round(stream_sec, 2) if stream_sec > 0 else None,
+                    "e2e_s": round(e2e_sec, 2) if e2e_sec > 0 else None,
+                }
+
+    if not turns and last_speed is None:
+        return None
+
+    return {
+        "turns": turns,
+        "cache": {
+            **last_cache,
+            "session_hit_pct": round(total_cache_read / total_in * 100.0, 1) if total_in > 0 else 0.0,
+            "session_cache_read_tokens": total_cache_read,
+            "session_input_tokens": total_in,
+        } if last_cache else None,
+        "speed": {
+            **last_speed,
+            "session_decode_tok_per_s": round(stream_tok_sum / stream_sec_sum, 1) if stream_sec_sum >= 0.1 else None,
+            "session_e2e_tok_per_s": round(e2e_tok_sum / e2e_sec_sum, 1) if e2e_sec_sum >= 0.1 else None,
+        } if last_speed else None,
+    }
+
+
 def collect_stats(steps: list[Step], gen: Msg | None, limit: int) -> dict:
     st = {k: 0 for k in (
         "user", "agent", "tool", "checkpoint", "system_messages", "system_prompt", "system_tools",
@@ -512,6 +603,7 @@ def collect_stats(steps: list[Step], gen: Msg | None, limit: int) -> dict:
     st["knowledge_files"] = knowledge
     st["artifact_files"] = artifacts
     st["skill_files"] = skill_files
+    st["telemetry"] = collect_telemetry(steps)
     return st
 
 
@@ -813,6 +905,7 @@ def main():
             ],
             "active_checkpoint": st["active_checkpoint"],
             "checkpoints": st["checkpoints"],
+            "telemetry": st["telemetry"],
             "knowledge_files": [{"path": p, "tokens": t} for p, t in st["knowledge_files"]],
             "artifact_files": [{"path": p, "tokens": t} for p, t in st["artifact_files"]],
             "skill_files": [{"path": p, "tokens": t} for p, t in st["skill_files"]],
