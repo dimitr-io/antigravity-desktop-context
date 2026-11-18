@@ -82,6 +82,12 @@
   ul { list-style: none; margin: 0; padding: 0; }
   .ck-main { display: flex; justify-content: space-between; gap: 8px; }
   .badge { font-size: 11px; color: #81c995; border: 1px solid color-mix(in srgb, #81c995 40%, transparent); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
+  .tel-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tel-card { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+  .tel-label { font-size: 11px; color: var(--dim); margin-bottom: 2px; }
+  .tel-val { font-size: 16px; font-weight: 600; line-height: 1.25; }
+  .tel-unit { font-size: 11.5px; font-weight: 400; color: var(--dim); margin-left: 2px; }
+  .tel-sub { font-size: 11px; color: var(--dim); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   .empty { margin: 48px 8px; text-align: center; color: var(--dim); }
   footer { margin-top: 16px; font-size: 11px; color: var(--dim); display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
@@ -152,6 +158,40 @@
       <div class="group">${free}</div>${buffer}</section>`;
   }
 
+  function telemetry(r) {
+    const t = r.telemetry;
+    if (!t || (!t.cache && !t.speed)) return '';
+    let cards = '';
+    if (t.cache) {
+      const c = t.cache;
+      const tip = `Last turn: ${fmtTok(c.cache_read_tokens)} cached + ${fmtTok(c.fresh_input_tokens)} uncached (${c.hit_pct.toFixed(1)}%). Session total: ${fmtTok(c.session_cache_read_tokens)} / ${fmtTok(c.session_input_tokens)} (${c.session_hit_pct.toFixed(1)}%) across ${t.turns} turn(s).`;
+      cards += `<div class="tel-card" title="${esc(tip)}">
+        <div class="tel-label">Prompt cache</div>
+        <div class="tel-val num">${c.hit_pct.toFixed(1)}%<span class="tel-unit">hit</span></div>
+        <div class="tel-sub num">${fmtTok(c.cache_read_tokens)} hit · avg ${c.session_hit_pct.toFixed(1)}%</div>
+      </div>`;
+    }
+    if (t.speed) {
+      const s = t.speed;
+      const primary = s.decode_tok_per_s != null ? s.decode_tok_per_s : s.e2e_tok_per_s;
+      const avg = s.session_decode_tok_per_s != null ? s.session_decode_tok_per_s : s.session_e2e_tok_per_s;
+      const subParts = [];
+      if (s.ttft_s != null) subParts.push(`TTFT ${s.ttft_s.toFixed(1)}s`);
+      if (avg != null) subParts.push(`avg ${avg.toFixed(1)}/s`);
+      const tipParts = [`Last turn output: ${fmtTok(s.output_tokens)} tokens`];
+      if (s.thinking_tokens || s.response_tokens) tipParts.push(`(${fmtTok(s.thinking_tokens)} thinking + ${fmtTok(s.response_tokens)} reply)`);
+      if (s.decode_tok_per_s != null) tipParts.push(`Stream decode: ${s.decode_tok_per_s.toFixed(1)} tok/s (${s.stream_s}s)`);
+      if (s.e2e_tok_per_s != null) tipParts.push(`End-to-end: ${s.e2e_tok_per_s.toFixed(1)} tok/s (${s.e2e_s}s)`);
+      if (s.ttft_s != null) tipParts.push(`TTFT: ${s.ttft_s.toFixed(2)}s`);
+      cards += `<div class="tel-card" title="${esc(tipParts.join(' · '))}">
+        <div class="tel-label">Output speed</div>
+        <div class="tel-val num">${primary.toFixed(1)}<span class="tel-unit">tok/s</span></div>
+        <div class="tel-sub num">${esc(subParts.join(' · ') || `${fmtTok(s.output_tokens)} out`)}</div>
+      </div>`;
+    }
+    return `<section><h2>Performance <span class="hint">last turn · ${t.turns} turns</span></h2><div class="tel-cards">${cards}</div></section>`;
+  }
+
   function checkpoints(r) {
     const ck = r.checkpoint_view;
     if (!ck) return '';
@@ -192,6 +232,7 @@
         ${limit ? `<span class="pct num">${r.used_pct.toFixed(1)}%</span>` : ''}
       </div>
       ${grid(r)}
+      ${telemetry(r)}
       ${categories(r)}
       ${checkpoints(r)}
       ${files('Knowledge files', '/rules', r.knowledge_files)}

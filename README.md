@@ -33,6 +33,7 @@ The report follows the CLI's `/context` (`cli/model.ContextModel` in agy 1.4.4),
 
 - **Header**: model name, used/limit tokens and percentage.
 - **Usage grid**: each dot is 1% of the context window. Segments, in order: system (prompt + tools + overhead), user messages, agent responses, tool calls, customizations, then free space. Every non-empty segment gets at least one dot.
+- **Performance**: prompt-cache hit rate (last turn and session average, from `model_usage` cached vs. uncached input tokens) and output throughput (`tok/s` and TTFT, from step creation, streaming-start and completion timestamps).
 - **Token usage**: `User messages`, `Agent responses` and `Tool calls` always show; `System messages`, `System prompt`, `System tools`, `System overhead`, `Rules`, `Skills`, `Subagents`, `Legacy workflows`, `Workflows`, `Plugins` and `MCP tools` show only when non-zero. Then `Free space`, and the `Checkpoint buffer` (tokens in checkpoint steps, not counted in usage).
 - **Before the first reply, or right after a compaction**: per-step estimates, like the CLI ("Estimated usage (awaiting generation)" / "Estimated after compaction · updates next turn").
 - **Checkpoints**: the active checkpoint and how many older ones were summarized.

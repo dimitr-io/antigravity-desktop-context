@@ -94,8 +94,20 @@ def planner(text: str) -> bytes:
     return f(1, text)
 
 
-def usage(input_tokens: int = 0, output: int = 0, cache_read: int = 0) -> bytes:
-    return m(f(2, input_tokens), f(3, output), f(5, cache_read))
+def usage(input_tokens: int = 0, output: int = 0, cache_read: int = 0, cache_write: int = 0,
+          thinking: int = 0, response: int = 0) -> bytes:
+    return m(
+        f(2, input_tokens),
+        f(3, output),
+        f(4, cache_write) if cache_write else b"",
+        f(5, cache_read),
+        f(9, thinking) if thinking else b"",
+        f(10, response) if response else b"",
+    )
+
+
+def ts(seconds: int, nanos: int = 0) -> bytes:
+    return m(f(1, seconds), f(2, nanos) if nanos else b"")
 
 
 def tool_call(args: str) -> bytes:
@@ -339,6 +351,44 @@ class ReportTest(unittest.TestCase):
         lines = out.splitlines()
         self.assertEqual(lines[2], "Test Model · 300/200.0k tokens")  # stats above the grid
         self.assertTrue(lines[-3].startswith("□"))
+
+    # --- telemetry ---
+
+    def test_telemetry_cache_and_speed_across_turns(self):
+        # Turn 1: 1000 fresh input, 0 cached; 200 output tokens over 2s stream (after 3s TTFT -> 5s E2E).
+        md1 = m(f(1, ts(1000)), f(6, ts(1003)), f(7, ts(1005)), f(9, usage(1000, 200, 0, thinking=80, response=120)))
+        # Turn 2: 200 fresh input, 1800 cached (90.0%); 400 output tokens over 4s stream (after 1s TTFT -> 5s E2E).
+        md2 = m(f(1, ts(1010)), f(6, ts(1011)), f(7, ts(1015)), f(9, usage(200, 400, 1800, thinking=150, response=250)))
+        self.db.step(PLANNER_RESPONSE, metadata=md1, payload_field=P_PLANNER, payload=planner("a"))
+        self.db.step(PLANNER_RESPONSE, metadata=md2, payload_field=P_PLANNER, payload=planner("b"))
+
+        tel = self.report()["telemetry"]
+        self.assertEqual(tel["turns"], 2)
+        self.assertEqual(tel["cache"], {
+            "hit_pct": 90.0,
+            "cache_read_tokens": 1800,
+            "fresh_input_tokens": 200,
+            "input_tokens": 2000,
+            "session_hit_pct": 60.0,  # 1800 / (1000 + 2000)
+            "session_cache_read_tokens": 1800,
+            "session_input_tokens": 3000,
+        })
+        self.assertEqual(tel["speed"], {
+            "output_tokens": 400,
+            "thinking_tokens": 150,
+            "response_tokens": 250,
+            "decode_tok_per_s": 100.0,  # 400 / 4s
+            "e2e_tok_per_s": 80.0,      # 400 / 5s
+            "ttft_s": 1.0,
+            "stream_s": 4.0,
+            "e2e_s": 5.0,
+            "session_decode_tok_per_s": 100.0,  # 600 / 6s
+            "session_e2e_tok_per_s": 60.0,      # 600 / 10s
+        })
+
+    def test_telemetry_absent_without_model_usage(self):
+        self.db.step(USER_INPUT, payload_field=P_USER, payload=user_input("hello"))
+        self.assertIsNone(self.report()["telemetry"])
 
 
 class FormatTest(unittest.TestCase):
